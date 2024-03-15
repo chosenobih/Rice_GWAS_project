@@ -1,0 +1,438 @@
+---
+title: "Oxi_GWAS_rTASSEL"
+author: "Chosen_Obih"
+date: "2024-02-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Allocate maximum memory to rTASSEL, load rjava and set working directory. The memory allocation should always be done before loading rTASSEL
+```{r}
+options(java.parameters = c("-Xmx30g", "-Xms30g"))
+library(rJava)
+setwd("/home/chosen/Desktop/Rice_GWAS_project/data/GENO_data/")
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(magrittr)
+library(rTASSEL)
+library(tibble)
+library(ggtree)
+```
+
+Create logging file. #This should be run once at the beginning of the analysis
+```{r}
+rTASSEL::startLogger(fullPath = NULL, fileName = "Feb_22")
+```
+
+
+Create path to input files
+```{r}
+# Load data
+snp_file <- "/home/chosen/Desktop/Rice_GWAS_project/data/GENO_data/1_GBSCornell_IndicaPray_81347snps_271_accs.hmp.txt"
+oxi_file <- "/home/chosen/Desktop/Rice_GWAS_project/data/oxi_data_CON.txt"
+output_dir <- "/home/chosen/Desktop/Rice_GWAS_project/data/GENO_data/"
+```
+
+Load in genotype and phenotype data
+```{r}
+geno <- rTASSEL::readGenotypeTableFromPath(path = snp_file)
+
+pheno <- rTASSEL::readPhenotypeFromPath(path = oxi_file)
+```
+
+Join genotype and phenotype data for data exploration
+```{r}
+geno_pheno <- readGenotypePhenotype(
+  phenoPathDFOrObj = pheno,
+  genoPathOrObj = geno
+)
+```
+
+You can extract rTASSEL data to R data format
+```{r}
+geno_mat <- as.matrix(geno)
+#geno_mat[1:5, 1:5] #view the first 5 rows and columns
+```
+
+Get summary tables
+```{r}
+geno_pheno %>% siteSummary() %>% head()
+geno_pheno %>% taxaSummary() %>% head()
+geno_pheno %>% taxaList() %>% head(20)
+geno_pheno %>% positionList() %>% head()
+```
+
+PCA # This produces an S4 vector object. Not captured in tutorial!
+```{r}
+pcaRes <- rTASSEL::pca(geno_pheno)
+#str(pcaRes)
+```
+
+Plot total variance for first 10 PCs
+```{r}
+nPCs <- 10 # set number of PCs to plot
+pcaRes@results$Eigenvalues_Datum %>% # get data frame from the results S4 object, list object (pcaRes)
+  head(n = nPCs) %>% # take the first 'n' PCs in the data frame
+  ggplot() +
+  aes(x = PC, y = proportion_of_total, group = 1) + #group is set to 1 because data is a "basic single vector data" not categories
+  geom_line(color = "red") +
+  geom_point(size = 3) +
+  xlab("PC") +
+  ylab("Proportion of total variance")
+```
+
+Load in meta data to plot PCA based on it.
+```{r}
+taxa_metadata <- read.csv("/home/chosen/Desktop/Rice_GWAS_project/data/meta_oxi_data.csv")
+taxa_metadata <- taxa_metadata %>%
+  mutate(Taxa = as.character(Taxa)) #change Taxa column from inteher to character.
+```
+
+Join the meta data dataframe to PC_Datum dataframe based on Taxa 
+```{r}
+pca_Datum <- pcaRes@results$PC_Datum
+pca_Datum %>%
+  left_join(taxa_metadata, by = "Taxa") %>%
+  head()
+```
+
+Plot the new PCA
+```{r}
+pca_Datum %>%
+  left_join(taxa_metadata, by = "Taxa") %>%
+  ggplot() +
+  aes(PC1, PC2, color = Treatment) +
+  geom_point(size = 2)
+```
+
+Plot phylogentic tree. rTASSEL support two options UPMGA & neighbourhood joining. Auto = UPMGA
+```{r}
+phyloRes <- rTASSEL::createTree(geno_pheno)
+```
+
+Example of filterig the the phylogeny based on taxaList
+```{r fig.height=40, fig.width=8}
+geno_pheno %>%
+  #filterGenotypeTableTaxa(txa = taxaList(.) %>% sample(size = 20)) %>%
+  createTree() %>%
+  plot()
+```
+
+Using ggtree library to modify the tree
+```{r fig.height=5, fig.width=5}
+geno_pheno %>%
+  createTree() %>%
+  ggtree(size = 1.5, layout = "circular", branch.length = "none") #%<+%
+# meta_oxi_data +
+# aes(color = Treatment)
+```
+
+Calculate sequence diversity
+ - By default, this will generate a single set of diversity metrics for all markers
+ - We can change this by activating a sliding window and step parameter which "scan" through sets of marker 
+```{r}
+seqRes <- seqDiversity(geno_pheno, slidingWindowAnalysis = TRUE, windowSize = 200, stepSize = 25)
+seqRes$Diversity %>% head()
+```
+
+
+```{r fig.height=5, fig.width=12}
+seqRes$Diversity %>%
+  dplyr::filter(Chromosome == "1") %>%
+  ggplot() +
+  aes(x = StartChrPosition, y = TajimaD) +
+  geom_line() +
+  geom_point() +
+  xlab("Position") +
+  ylab("Tajima's D")
+```
+
+Filter genotype table sites
+```{r}
+geno_pheno_filtered <- rTASSEL::filterGenotypeTableSites(
+    tasObj = geno_pheno,
+    siteMinCount = 150,
+    siteMinAlleleFreq = 0.05,
+    siteMaxAlleleFreq = 1.0,
+    siteRangeFilterType = "none"
+)
+```
+
+Create a kinship matrix object
+```{r}
+kin <- rTASSEL::kinshipMatrix(tasObj = geno_pheno_filtered, method = "Centered_IBS", maxAlleles = 6)
+```
+
+#Glycolate oxidase (GOX) - photorespiration enzyme
+```{r}
+assocRes_MLM_GOX <- assocModelFitter(geno_pheno_filtered, formula = GOX ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#GOX plotting
+```{r fig.height=4, fig.width=12, dpi=300}
+plot_GOX <- plotManhattan(assocRes_MLM_GOX, trait = "GOX", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/GOX.png", width=1000, height=400, pointsize = 12)
+print(plot_GOX)
+dev.off()
+```
+
+#Hydroxpyruvate reductase (HPR) - photorespiration enzyme
+```{r}
+assocRes_MLM_HPR <- assocModelFitter(geno_pheno_filtered, formula = HPR ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#HPR plotting
+```{r fig.height=4, fig.width=12}
+plot_HPR <- plotManhattan(assocRes_MLM_HPR, trait = "HPR", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/HPR.png", width=1000, height=400, pointsize = 12)
+print(plot_HPR)
+dev.off()
+```
+
+#Peroxidase (POX) - Antioxidant enzyme
+```{r}
+assocRes_MLM_POX <- assocModelFitter(geno_pheno_filtered, formula = POX ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#POX plotting
+```{r fig.height=4, fig.width=12}
+plot_POX <- plotManhattan(assocRes_MLM_POX, trait = "POX", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/POX.png", width=1000, height=400, pointsize = 12)
+print(plot_POX)
+dev.off()
+```
+
+#Ascorbate peroxidase (APX) - Antioxidant enzyme
+```{r}
+assocRes_MLM_APX <- assocModelFitter(geno_pheno_filtered, formula = APX ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#APX plotting
+```{r fig.height=4, fig.width=12}
+plot_APX <- plotManhattan(assocRes_MLM_APX, trait = "APX", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/APX.png", width=1000, height=400, pointsize = 12)
+print(plot_APX)
+dev.off()
+```
+
+#Glutathione peroxidase (GPX) - Antioxidant enzyme
+```{r}
+assocRes_MLM_GPX <- assocModelFitter(geno_pheno_filtered, formula = GPX ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#GPX plotting
+```{r fig.height=4, fig.width=12}
+plot_GPX <- plotManhattan(assocRes_MLM_GPX, trait = "GPX", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/GPX.png", width=1000, height=400, pointsize = 12)
+print(plot_GPX)
+dev.off()
+```
+
+#Catalse (CAT) - Antioxidant enzyme
+```{r}
+assocRes_MLM_CAT <- assocModelFitter(geno_pheno_filtered, formula = CAT ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#CAT plotting
+```{r fig.height=4, fig.width=12}
+plot_CAT <- plotManhattan(assocRes_MLM_CAT, trait = "CAT", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/CAT.png", width=1000, height=400, pointsize = 12)
+print(plot_CAT)
+dev.off()
+```
+
+#Glutathione S-transferase (GST) - Antioxidant enzyme
+```{r}
+assocRes_MLM_GST <- assocModelFitter(geno_pheno_filtered, formula = GST ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#GST plotting
+```{r fig.height=4, fig.width=12}
+plot_GST <- plotManhattan(assocRes_MLM_GST, trait = "GST", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/GST.png", width=1000, height=400, pointsize = 12)
+print(plot_GST)
+dev.off()
+```
+
+#Superoxide dismutase (SOD) - Antioxidant enzyme
+```{r}
+assocRes_MLM_SOD <- assocModelFitter(geno_pheno_filtered, formula = SOD ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#SOD plotting
+```{r fig.height=4, fig.width=12}
+plot_SOD <- plotManhattan(assocRes_MLM_SOD, trait = "SOD", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/SOD.png", width=1000, height=400, pointsize = 12)
+print(plot_SOD)
+dev.off()
+```
+
+#Ascorbate oxidase (AO) - Antioxidant enzyme
+```{r}
+assocRes_MLM_AO <- assocModelFitter(geno_pheno_filtered, formula = AO ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#AO plotting
+```{r fig.height=4, fig.width=12}
+plot_AO <- plotManhattan(assocRes_MLM_AO, trait = "AO", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/AO.png", width=1000, height=400, pointsize = 12)
+print(plot_AO)
+dev.off()
+```
+
+#Glutathione reductase (GR) - Antioxidant enzyme
+```{r}
+assocRes_MLM_GR <- assocModelFitter(geno_pheno_filtered, formula = GR ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#GR plotting
+```{r fig.height=4, fig.width=12}
+plot_GR <- plotManhattan(assocRes_MLM_GR, trait = "GR", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/GR.png", width=1000, height=400, pointsize = 12)
+print(plot_GR)
+dev.off()
+```
+
+#Glutaredoxins (Grxs) - Antioxidant enzyme
+```{r}
+assocRes_MLM_Grxs <- assocModelFitter(geno_pheno_filtered, formula = Grxs ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#Grxs plotting
+```{r fig.height=4, fig.width=12}
+plot_Grxs <- plotManhattan(assocRes_MLM_Grxs, trait = "Grxs", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/Grxs.png", width=1000, height=400, pointsize = 12)
+print(plot_Grxs)
+dev.off()
+```
+
+#Thioredoxins (Trxs) - Antioxidant enzyme
+```{r}
+assocRes_MLM_Trxs <- assocModelFitter(geno_pheno_filtered, formula = Trxs ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#Trxs plotting
+```{r fig.height=4, fig.width=12}
+plot_Trxs <- plotManhattan(assocRes_MLM_Trxs, trait = "Trxs", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/Trxs.png", width=1000, height=400, pointsize = 12)
+print(plot_Trxs)
+dev.off()
+```
+
+#Peroxiredoxins (Prxs) - Antioxidant enzyme
+```{r}
+assocRes_MLM_Prxs <- assocModelFitter(geno_pheno_filtered, formula = Prxs ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#Prxs plotting
+```{r fig.height=4, fig.width=12}
+plot_Prxs <- plotManhattan(assocRes_MLM_Prxs, trait = "Prxs", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/Prxs.png", width=1000, height=400, pointsize = 12)
+print(plot_Prxs)
+dev.off()
+```
+
+#Ferredoxins (Frxs) - Antioxidant enzyme
+```{r}
+assocRes_MLM_Frxs <- assocModelFitter(geno_pheno_filtered, formula = Frxs ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#Frxs plotting
+```{r fig.height=4, fig.width=12}
+plot_Frxs <- plotManhattan(assocRes_MLM_Frxs, trait = "Frxs", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/Frxs.png", width=1000, height=400, pointsize = 12)
+print(plot_Frxs)
+dev.off()
+```
+
+#Malondialdehyde (MDA) - Oxidative stress marker 
+```{r}
+assocRes_MLM_MDA <- assocModelFitter(geno_pheno_filtered, formula = MDA ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#MDA plotting
+```{r fig.height=4, fig.width=12}
+plot_MDA <- plotManhattan(assocRes_MLM_MDA, trait = "MDA", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/MDA.png", width=1000, height=400, pointsize = 12)
+print(plot_MDA)
+dev.off()
+```
+
+#Total polyphenol content (Poly) - molecular antioxidant
+```{r}
+assocRes_MLM_Poly <- assocModelFitter(geno_pheno_filtered, formula = Poly ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#Poly plotting
+```{r fig.height=4, fig.width=12}
+plot_Poly <- plotManhattan(assocRes_MLM_Poly, trait = "Poly", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/Poly.png", width=1000, height=400, pointsize = 12)
+print(plot_Poly)
+dev.off()
+```
+
+#Protein oxidation (ProtOx) - Oxidative stress marker 
+```{r}
+assocRes_MLM_ProtOx <- assocModelFitter(geno_pheno_filtered, formula = ProtOx ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#ProtOx plotting
+```{r fig.height=4, fig.width=12}
+plot_ProtOx <- plotManhattan(assocRes_MLM_ProtOx, trait = "ProtOx", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/ProtOx.png", width=1000, height=400, pointsize = 12)
+print(plot_ProtOx)
+dev.off()
+```
+
+#Dehydroascorbate redutase (DHAR) - Antioxidant enzyme
+```{r}
+assocRes_MLM_DHAR <- assocModelFitter(geno_pheno_filtered, formula = DHAR ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#DHAR plotting
+```{r fig.height=4, fig.width=12}
+plot_DHAR <- plotManhattan(assocRes_MLM_DHAR, trait = "DHAR", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/DHAR.png", width=1000, height=400, pointsize = 12)
+print(plot_DHAR)
+dev.off()
+```
+
+#Monodehydroascrobate reductas (MDHAR) - Antioxidant enzyme
+```{r}
+assocRes_MLM_MDHAR <- assocModelFitter(geno_pheno_filtered, formula = MDHAR ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#MDHAR plotting
+```{r fig.height=4, fig.width=12}
+plot_MDHAR <- plotManhattan(assocRes_MLM_MDHAR, trait = "MDHAR", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/MDHAR.png", width=1000, height=400, pointsize = 12)
+print(plot_MDHAR)
+dev.off()
+```
+
+#Total Antioxidant Capacity (TAC) - molecular antioxidant
+```{r}
+assocRes_MLM_TAC <- assocModelFitter(geno_pheno_filtered, formula = TAC ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#TAC plotting
+```{r fig.height=4, fig.width=12}
+plot_TAC <- plotManhattan(assocRes_MLM_TAC, trait = "TAC", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+png("/home/chosen/Desktop/Rice_GWAS_project/results/plots/rTASSEL_MLM_CON/TAC.png", width=1000, height=400, pointsize = 12)
+print(plot_TAC)
+dev.off()
+```
+
+Extracting GWAS result
+```{r}
+result_TAC <- assocRes_MLM_TAC@results$MLM_Stats
+write.csv(result_TAC, "CON_TAC_MLM_stats.csv", row.names = FALSE)
+```
+
