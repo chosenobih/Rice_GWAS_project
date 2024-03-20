@@ -9,20 +9,29 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-
+## mere humans computational problem.
+## I was having issues configuring rJava to allocate memory. I follow the steps below to fix it. Unfortunately, these steps have to be repeated every time Rstudio is restarted, but at least it works.
+## Run each line in the console.
 ```{r}
-## Setting max heap memory to 16 GB example
-options(java.parameters = "-Xmx16g")
+remove.packages("rJava", lib="~/R/x86_64-pc-linux-gnu-library/4.3")
+
+Sys.setenv(JAVA_HOME='/usr/lib/jvm/java-17-openjdk-amd64')
+
+install.packages("rJava")
+
 library(rJava)
-library(rTASSEL)
+.jinit(parameters="-Xmx30g")
+
+```
+
+## Confirm that the specified memory was allocated.
+```{r}
 maxAllocRam <- .jcall(.jnew("java/lang/Runtime"), "J", "maxMemory") / 1e9 
 message("You have ", round(maxAllocRam, 2), "GB memory available.", sep = "")
 ```
 
-Allocate maximum memory to rTASSEL, load rjava and set working directory. The memory allocation should always be done before loading rTASSEL
+set working directory.
 ```{r}
-options(java.parameters = c("-Xmx30g", "-Xms30g"))
-library(rJava)
 setwd("/home/chosen/Desktop/Rice_GWAS_project/data/GENO_data/")
 ```
 
@@ -33,12 +42,12 @@ library(ggplot2)
 library(magrittr)
 library(rTASSEL)
 library(tibble)
-#library(ggtree)
+library(ggtree)
 ```
 
 Create logging file. #This should be run once at the beginning of the analysis
 ```{r}
-rTASSEL::startLogger(fullPath = NULL, fileName = "Mar_10")
+rTASSEL::startLogger(fullPath = NULL, fileName = "Mar_20")
 ```
 
 
@@ -46,7 +55,7 @@ Create path to input files
 ```{r}
 # Load data
 snp_file <- "/home/chosen/Desktop/Rice_GWAS_project/data/GENO_data/1_GBSCornell_IndicaPray_81347snps_271_accs.hmp.txt"
-oxi_file <- "/home/chosen/Desktop/Rice_GWAS_project/data/oxi_data_DRO.txt"
+oxi_file <- "/home/chosen/Desktop/Rice_GWAS_project/data/clean/oxi_data_covariate.txt"
 output_dir <- "/home/chosen/Desktop/Rice_GWAS_project/data/GENO_data/"
 ```
 
@@ -355,14 +364,24 @@ plotManhattan(assocRes_MLM_ProtOx, trait = "ProtOx", threshold = 5, interactive 
 assocRes_MLM_DHAR <- assocModelFitter(geno_pheno_filtered, formula = DHAR ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
 ```
 
-#DHAR plotting
+#Dehydroascorbate redutase (DHAR) - Antioxidant enzyme - GWAS with PC 1-5 as covariate
+```{r}
+assocRes_MLM_DHAR <- assocModelFitter(geno_pheno_filtered, formula = DHAR ~ Treatment + PC1 + PC2 + PC3, fitMarkers = TRUE, kinship = kin, maxP = 1)
+```
+
+#DHAR plotting - PC 1-5
 ```{r fig.height=4, fig.width=12}
-plotManhattan(assocRes_MLM_DHAR, trait = "DHAR", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+plotManhattan(assocRes_MLM_DHAR, trait = "DHAR", threshold = 4, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
+```
+
+#DHAR plotting PC 1-3
+```{r fig.height=4, fig.width=12}
+plotManhattan(assocRes_MLM_DHAR, trait = "DHAR", threshold = 4.5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
 ```
 
 #Monodehydroascrobate reductas (MDHAR) - Antioxidant enzyme
 ```{r}
-assocRes_MLM_MDHAR <- assocModelFitter(geno_pheno_filtered, formula = MDHAR ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+assocRes_MLM_MDHAR <- assocModelFitter(geno_pheno_filtered, formula = MDHAR ~ Treatment + PC1 + PC2 + PC3, fitMarkers = TRUE, kinship = kin, maxP = 1)
 ```
 
 #MDHAR plotting
@@ -372,7 +391,7 @@ plotManhattan(assocRes_MLM_MDHAR, trait = "MDHAR", threshold = 5, interactive = 
 
 #Total Antioxidant Capacity (TAC) - molecular antioxidant
 ```{r}
-assocRes_MLM_TAC <- assocModelFitter(geno_pheno_filtered, formula = TAC ~ Treatment, fitMarkers = TRUE, kinship = kin, maxP = 1)
+assocRes_MLM_TAC <- assocModelFitter(geno_pheno_filtered, formula = TAC ~ Treatment + PC1 + PC2 + PC3, fitMarkers = TRUE, kinship = kin, maxP = 1)
 ```
 
 #TAC plotting
@@ -380,9 +399,106 @@ assocRes_MLM_TAC <- assocModelFitter(geno_pheno_filtered, formula = TAC ~ Treatm
 plotManhattan(assocRes_MLM_TAC, trait = "TAC", threshold = 5, interactive = FALSE, colors = c("#00AFBB", "#FC4E07"))
 ```
 
-Extracting GWAS result
+Extracting TAC GWAS result
 ```{r}
 result_TAC <- assocRes_MLM_TAC@results$MLM_Stats
 write.csv(result_TAC, "DRO_TAC_MLM_stats.csv", row.names = FALSE)
+```
+
+Extracting MDHAR GWAS result
+```{r}
+result_MDHAR <- assocRes_MLM_MDHAR@results$MLM_Stats
+write.csv(result_MDHAR, "DRO_MDHAR_MLM_stats.csv", row.names = FALSE)
+```
+
+LD plotting for MDHAR
+```{r fig.height=8, fig.width=8}
+# Filter genotype table by position
+tasGenoPhenoFilt <- filterGenotypeTableSites(
+    tasObj              = geno_pheno_filtered,
+    siteRangeFilterType = "position",
+    startPos            = 21802147,
+    endPos              = 21935058,
+    startChr            = 6,
+    endChr              = 6
+)
+
+# Generate and visualize LD
+myLD <- ldPlot(
+    tasObj  = tasGenoPhenoFilt,
+    ldType  = "All",
+    plotVal = "r2",
+    verbose = FALSE
+)
+
+myLD
+```
+
+Extracting DHAR GWAS result
+```{r}
+result_DHAR <- assocRes_MLM_DHAR@results$MLM_Stats
+write.csv(result_DHAR, "DRO_DHAR_PC1_3_MLM_stats.csv", row.names = FALSE)
+```
+
+Extract PC
+```{r}
+write.csv(pca_Datum, "pca_oxi_markers.csv", row.names = FALSE)
+```
+
+
+LD plotting for DHAR
+```{r fig.height=8, fig.width=8}
+# Filter genotype table by position
+tasGenoPhenoFilt <- filterGenotypeTableSites(
+    tasObj              = geno_pheno_filtered,
+    siteRangeFilterType = "position",
+    startPos            = 21883335,
+    endPos              = 21935058,
+    startChr            = 6,
+    endChr              = 6
+)
+
+# Generate and visualize LD
+myLD_DHAR <- ldPlot(
+    tasObj  = tasGenoPhenoFilt,
+    ldType  = "All",
+    plotVal = "r2",
+    verbose = FALSE
+)
+
+myLD_DHAR
+```
+
+Extracting DHAR GWAS result
+```{r}
+result_TAC <- assocRes_MLM_TAC@results$MLM_Stats
+write.csv(result_TAC, "DRO_TAC_PC1_3_MLM_stats.csv", row.names = FALSE)
+```
+
+LD plotting for TAC
+```{r fig.height=8, fig.width=8}
+# Filter genotype table by position
+tasGenoPhenoFilt <- filterGenotypeTableSites(
+    tasObj              = geno_pheno_filtered,
+    siteRangeFilterType = "position",
+    startPos            = 21735713,
+    endPos              = 22072919,
+    startChr            = 6,
+    endChr              = 6
+)
+
+# Generate and visualize LD
+myLD_TAC <- ldPlot(
+    tasObj  = tasGenoPhenoFilt,
+    ldType  = "All",
+    plotVal = "r2",
+    verbose = FALSE
+)
+
+myLD_DHAR
+```
+
+```{r}
+
 ```
 
