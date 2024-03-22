@@ -1,0 +1,32 @@
+---
+title: "oxi_GWAS_GAPIT_DRO"
+author: "chosen_obih"
+date: "2024-03-18"
+output: html_document
+---
+
+## load packages
+```{r}
+setwd("~/Desktop/Rice_GWAS_project/data/gapit_data/")
+library(GAPIT)
+library(data.table)
+```
+
+## load in data
+```{r}
+geno_1 <- read.delim("~/Desktop/Rice_GWAS_project/data/gapit_data/SNP_81K.txt", header = FALSE, sep = "\t")
+pheno <- read.table("~/Desktop/Rice_GWAS_project/data/gapit_data/oxi_data.txt", head = TRUE)
+marker <- read.table("~/Desktop/Rice_GWAS_project/data/gapit_data/marker_info.txt", head = TRUE)
+```
+
+```{r}
+gapit_GWAS_1 <- GAPIT(Y=pheno[,c(1,11)],
+                    G=geno,
+  model=c("GLM","MLM","SUPER","MLMM","FarmCPU","Blink"),# choose model
+  PCA.total=3,                                          # set total PCAs
+  NJtree.group=4,                                       # set the number of clusting group in Njtree plot
+  Inter.Plot=TRUE,                                      # perform interactive plot
+  Multiple_analysis=TRUE,                               # perform multiple analysis
+  PCA.3d=TRUE)
+```
+
