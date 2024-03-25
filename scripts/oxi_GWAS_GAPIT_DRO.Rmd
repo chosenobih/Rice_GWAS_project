@@ -14,19 +14,16 @@ library(data.table)
 
 ## load in data
 ```{r}
-geno_1 <- read.delim("~/Desktop/Rice_GWAS_project/data/gapit_data/SNP_81K.txt", header = FALSE, sep = "\t")
+geno <- read.delim("~/Desktop/Rice_GWAS_project/data/GENO_data/1_GBSCornell_IndicaPray_81347snps_271_accs.hmp.txt", header = FALSE)
 pheno <- read.table("~/Desktop/Rice_GWAS_project/data/gapit_data/oxi_data.txt", head = TRUE)
 marker <- read.table("~/Desktop/Rice_GWAS_project/data/gapit_data/marker_info.txt", head = TRUE)
 ```
 
 ```{r}
-gapit_GWAS_1 <- GAPIT(Y=pheno[,c(1,11)],
-                    G=geno,
-  model=c("GLM","MLM","SUPER","MLMM","FarmCPU","Blink"),# choose model
-  PCA.total=3,                                          # set total PCAs
-  NJtree.group=4,                                       # set the number of clusting group in Njtree plot
-  Inter.Plot=TRUE,                                      # perform interactive plot
-  Multiple_analysis=TRUE,                               # perform multiple analysis
-  PCA.3d=TRUE)
+gapit_GWAS <- GAPIT(
+  Y=pheno[,c(1,10,11,19)],
+  G=geno,
+  PCA.total=3,
+  NJtree.group=3,
+  model=c("GLM","MLM","SUPER","MLMM","FarmCPU","Blink"))
 ```
-
